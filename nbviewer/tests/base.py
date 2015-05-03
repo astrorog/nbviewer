@@ -20,6 +20,7 @@ from unittest import TestCase
 
 from nbviewer.utils import url_path_join
 
+
 class NBViewerTestCase(TestCase):
     """A base class for tests that need a running nbviewer server."""
 
@@ -35,7 +36,7 @@ class NBViewerTestCase(TestCase):
                 time.sleep(.1)
             else:
                 break
-    
+
     @classmethod
     def wait_until_dead(cls):
         """Wait for the server to stop getting requests after shutdown"""
@@ -54,7 +55,7 @@ class NBViewerTestCase(TestCase):
             '--port=%d' % cls.port,
             # '--logging=debug',
         ]
-    
+
     @classmethod
     def setup_class(cls):
         server_cmd = cls.get_server_cmd()
@@ -73,6 +74,22 @@ class NBViewerTestCase(TestCase):
     @classmethod
     def url(cls, *parts):
         return url_path_join('http://localhost:%i' % cls.port, *parts)
+
+
+class FormatMixin(object):
+    @classmethod
+    def url(cls, *parts):
+        return url_path_join(
+            'http://localhost:%i' % cls.port, 'format', cls.key, *parts
+        )
+
+
+class FormatHTMLMixin(object):
+    key = "html"
+
+
+class FormatSlidesMixin(object):
+    key = "slides"
 
 
 @contextmanager

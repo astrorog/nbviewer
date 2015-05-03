@@ -9,7 +9,7 @@ import os
 import sys
 pjoin = os.path.join
 
-from distutils.core import setup
+from setuptools import setup
 
 def walk_subpkg(name):
     data_files = []
@@ -21,7 +21,12 @@ def walk_subpkg(name):
     return data_files
 
 pkg_data = {
-    "nbviewer": ['frontpage.json'] + walk_subpkg('static') + walk_subpkg('templates')
+    "nbviewer": (
+        ['frontpage.json'] +
+        walk_subpkg('static') +
+        walk_subpkg('templates') +
+        walk_subpkg('providers')
+    )
 }
 
 setup_args = dict(
@@ -29,11 +34,11 @@ setup_args = dict(
     version = '0.2.0',
     packages = ["nbviewer"],
     package_data = pkg_data,
-    author = "The IPython Development Team",
+    author = "The Jupyter Development Team",
     author_email = "ipython-dev@scipy.org",
     url = 'http://nbviewer.ipython.org',
-    description = "IPython Notebook Viewer",
-    long_description = "IPython nbconvert as a web service",
+    description = "Jupyter Notebook Viewer",
+    long_description = "Jupyter nbconvert as a web service",
     license = "BSD",
     classifiers = [
         'License :: OSI Approved :: BSD License',
@@ -42,7 +47,7 @@ setup_args = dict(
         'Programming Language :: Python :: 3',
         'Programming Language :: Python :: 3.3',
     ],
+    test_suite="nose.collector",
 )
 
 setup(**setup_args)
-

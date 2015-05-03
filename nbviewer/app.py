@@ -24,17 +24,21 @@ from tornado.options import define, options
 from jinja2 import Environment, FileSystemLoader
 
 from IPython.config import Config
-from IPython.nbconvert.exporters import HTMLExporter
 
-from .handlers import handlers, LocalFileHandler
+from .handlers import init_handlers, format_handlers
 from .cache import DummyAsyncCache, AsyncMultipartMemcache, MockCache, pylibmc
 from .index import NoSearch, ElasticSearch
+from .formats import configure_formats
+
+from .providers import default_providers, default_rewrites
+from .providers.local import LocalFileHandler
 
 try:
-    from .client import LoggingCurlAsyncHTTPClient as HTTPClientClass
+    from .providers.url.client import LoggingCurlAsyncHTTPClient as HTTPClientClass
 except ImportError:
-    from .client import LoggingSimpleAsyncHTTPClient as HTTPClientClass
-from .github import AsyncGitHubClient
+    from .providers.url.client import LoggingSimpleAsyncHTTPClient as HTTPClientClass
+
+
 from .log import log_request
 from .utils import git_info, ipython_info
 
@@ -78,11 +82,15 @@ def main():
     define("frontpage", default=FRONTPAGE_JSON, help="path to json file containing frontpage content", type=str)
     define("sslcert", help="path to ssl .crt file", type=str)
     define("sslkey", help="path to ssl .key file", type=str)
+    define("default_format", default="html", help="format to use for legacy / URLs", type=str)
+    define("proxy_host", default="", help="The proxy URL.", type=str)
+    define("proxy_port", default="", help="The proxy port.", type=int)
+    define("providers", default=default_providers, help="Full dotted package(s) that provide `default_handlers`", type=str, multiple=True, group="provider")
+    define("provider_rewrites", default=default_rewrites, help="Full dotted package(s) that provide `uri_rewrites`", type=str, multiple=True, group="provider")
     tornado.options.parse_command_line()
 
     # NBConvert config
     config = Config()
-    config.HTMLExporter.template_file = 'basic'
     config.NbconvertApp.fileext = 'html'
     config.CSSHTMLHeaderTransformer.enabled = False
     # don't strip the files prefix - we use it for redirects
@@ -95,12 +103,13 @@ def main():
 
     # setup memcache
     mc_pool = ThreadPoolExecutor(options.mc_threads)
+
+    # setup formats
+    formats = configure_formats(options, config, log.app_log)
+
     if options.processes:
-        # can't pickle exporter instances,
-        exporter = HTMLExporter
         pool = ProcessPoolExecutor(options.processes)
     else:
-        exporter = HTMLExporter(config=config, log=log.app_log)
         pool = ThreadPoolExecutor(options.threads)
 
     memcache_urls = os.environ.get('MEMCACHIER_SERVERS',
@@ -165,7 +174,6 @@ def main():
     )
     AsyncHTTPClient.configure(HTTPClientClass)
     client = AsyncHTTPClient()
-    github_client = AsyncGitHubClient(client)
 
     # load frontpage sections
     with io.open(options.frontpage, 'r') as f:
@@ -177,13 +185,23 @@ def main():
         for link in section['links']:
             max_cache_uris.add('/' + link['target'])
 
+    fetch_kwargs = dict(connect_timeout=10,)
+    if options.proxy_host: 
+        fetch_kwargs.update(dict(proxy_host=options.proxy_host,
+                                 proxy_port=options.proxy_port))
+
+        log.app_log.info("Using web proxy {proxy_host}:{proxy_port}."
+                         "".format(**fetch_kwargs))
+
     settings = dict(
         log_function=log_request,
         jinja2_env=env,
         static_path=static_path,
         client=client,
-        github_client=github_client,
-        exporter=exporter,
+        formats=formats,
+        default_format=options.default_format,
+        providers=options.providers,
+        provider_rewrites=options.provider_rewrites,
         config=config,
         index=indexer,
         cache=cache,
@@ -195,16 +213,21 @@ def main():
         gzip=True,
         render_timeout=20,
         localfile_path=os.path.abspath(options.localfiles),
-        fetch_kwargs=dict(
-            connect_timeout=10,
-        ),
+        fetch_kwargs=fetch_kwargs,
     )
 
-    # create and start the app
+    # handle handlers
+    handlers = init_handlers(formats, options.providers)
+
     if options.localfiles:
         log.app_log.warning("Serving local notebooks in %s, this can be a security risk", options.localfiles)
         # use absolute or relative paths:
-        handlers.insert(0, (r'/localfile/(.*)', LocalFileHandler))
+        local_handlers = [(r'/localfile/(.*)', LocalFileHandler)]
+        handlers = (
+            local_handlers +
+            format_handlers(formats, local_handlers) +
+            handlers
+        )
 
     # load ssl options
     ssl_options = None
@@ -214,6 +237,7 @@ def main():
             'keyfile' : options.sslkey,
         }
 
+    # create and start the app
     app = web.Application(handlers, debug=options.debug, **settings)
     http_server = httpserver.HTTPServer(app, xheaders=True, ssl_options=ssl_options)
     log.app_log.info("Listening on port %i", options.port)
